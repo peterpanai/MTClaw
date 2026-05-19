@@ -1,6 +1,33 @@
 {
   "name": "openclaw-session-bridge-plugin",
   "version": "0.2.0",
+  "description": "Up to 7x faster vertical-domain tool calls in OpenClaw via MTClaw Function Router (100% Pass@1, 6.85x permissive). This plugin forwards OpenClaw session id to the router so per-session tool history works correctly.",
   "type": "module",
-  "main": "index.ts"
+  "main": "index.ts",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MooreThreads/MTClaw.git",
+    "directory": "plugins/session-bridge"
+  },
+  "homepage": "https://github.com/MooreThreads/MTClaw",
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "function-router",
+    "tool-call-acceleration",
+    "vertical-domain",
+    "agent-latency",
+    "provider-proxy",
+    "session-bridge",
+    "mtclaw"
+  ],
+  "openclaw": {
+    "compat": {
+      "pluginApi": "1"
+    },
+    "build": {
+      "openclawVersion": ">=2026.3.24"
+    }
+  }
 }

@@ -38,14 +38,20 @@ const sessionBridgePlugin = {
     description: "Injects session headers into function_router requests",
     register(api) {
         api.logger.info?.("[session-bridge] registering provider");
+        // id must literally equal the configured provider id ("function_router") so
+        // OpenClaw 2026.5.18 finds this plugin via matchesProviderLiteralId when the
+        // provider config has api="openai-completions" (apiOwnerHint branch). hookAliases
+        // is retained for backwards compatibility with 2026.4.14's matcher path.
         api.registerProvider({
-            id: "openai-session-header",
-            label: "OpenAI-Compatible (Session Header)",
+            id: "function_router",
+            label: "Function Router (Session Header)",
+            aliases: ["openai-session-header"],
             hookAliases: ["function_router"],
             auth: [],
             /**
              * Wraps the base stream function to inject the session header.
-             * Called during agent initialization for HTTP (openai-completions) transport.
+             * On 2026.5.18 the per-call `options` argument carries `sessionId`;
+             * on 2026.4.14 `options` carries `sessionKey` and/or `sessionId`.
              */
             wrapStreamFn(ctx) {
                 const baseStreamFn = ctx.streamFn;
@@ -66,8 +72,8 @@ const sessionBridgePlugin = {
                 };
             },
             /**
-             * Returns transport turn state headers for WebSocket / Responses API paths.
-             * These transports call resolveTransportTurnState natively per turn.
+             * Returns transport turn state headers for WebSocket / Responses API paths
+             * (e.g. openai-responses), which call this hook natively per turn.
              */
             resolveTransportTurnState(ctx) {
                 const sessionHeaders = buildSessionHeaders(ctx);

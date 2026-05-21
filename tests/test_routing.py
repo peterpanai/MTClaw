@@ -10,11 +10,13 @@ from function_router import server
 def restore_state() -> None:
     old_config = server.STATE.config
     old_tools = server.STATE.tools
+    old_http_client = server.STATE.http_client
     try:
         yield
     finally:
         server.STATE.config = old_config
         server.STATE.tools = old_tools
+        server.STATE.http_client = old_http_client
 
 
 def make_config(max_tool_rounds: int = 3) -> server.AppConfig:
@@ -377,3 +379,90 @@ async def test_execute_tool_non_builtin_still_requires_script_file(tmp_path: Pat
     result = await server.execute_tool("custom_tool", json.dumps({"path": "/tmp"}))
 
     assert result["error"] == "script not found: custom_tool.sh"
+
+
+class _StubResponse:
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _StubHttpClient:
+    """Records call timeouts and replays a scripted sequence of responses."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.call_count = 0
+        self.timeouts_seen: list[float] = []
+
+    async def post(self, url, json=None, headers=None, timeout=None):
+        import httpx
+
+        self.call_count += 1
+        self.timeouts_seen.append(timeout)
+        item = self._responses.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return _StubResponse(item)
+
+
+@pytest.mark.asyncio
+async def test_call_qwen_uses_configured_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = make_config()
+    config.routing_timeout_s = 15.0
+    server.STATE.config = config
+    server.STATE.tools = []
+    client = _StubHttpClient([{"choices": [{"message": {"content": "ok"}}]}])
+    server.STATE.http_client = client
+
+    await server.call_qwen([{"role": "user", "content": "hi"}])
+
+    assert client.call_count == 1
+    assert client.timeouts_seen == [15.0]
+
+
+@pytest.mark.asyncio
+async def test_call_qwen_retries_once_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    server.STATE.config = make_config()
+    server.STATE.tools = []
+    client = _StubHttpClient([
+        httpx.ReadTimeout("slow"),
+        {"choices": [{"message": {"content": "recovered"}}]},
+    ])
+    server.STATE.http_client = client
+    monkeypatch.setattr(server.asyncio, "sleep", lambda _s: _noop_sleep())
+
+    result = await server.call_qwen([{"role": "user", "content": "hi"}])
+
+    assert client.call_count == 2
+    assert result["choices"][0]["message"]["content"] == "recovered"
+
+
+@pytest.mark.asyncio
+async def test_call_qwen_propagates_timeout_after_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    server.STATE.config = make_config()
+    server.STATE.tools = []
+    client = _StubHttpClient([
+        httpx.ReadTimeout("slow"),
+        httpx.ReadTimeout("still slow"),
+    ])
+    server.STATE.http_client = client
+    monkeypatch.setattr(server.asyncio, "sleep", lambda _s: _noop_sleep())
+
+    with pytest.raises(httpx.TimeoutException):
+        await server.call_qwen([{"role": "user", "content": "hi"}])
+
+    assert client.call_count == 2
+
+
+async def _noop_sleep() -> None:
+    return None

@@ -201,3 +201,23 @@ def test_load_config_invalid_structure(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="invalid config structure"):
         load_config(config_path)
+
+
+def test_load_config_default_routing_timeout(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    write_json(config_path, valid_config_payload())
+
+    config = load_config(config_path)
+
+    assert config.routing_timeout_s == 10.0
+
+
+def test_load_config_custom_routing_timeout(tmp_path: Path) -> None:
+    payload = valid_config_payload()
+    payload["routing_timeout_s"] = 20
+    config_path = tmp_path / "config.json"
+    write_json(config_path, payload)
+
+    config = load_config(config_path)
+
+    assert config.routing_timeout_s == 20.0

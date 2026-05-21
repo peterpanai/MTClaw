@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import sys
 import threading
@@ -153,6 +154,7 @@ class AppConfig:
     fr_context_history: bool = True
     fr_context_preserve: bool = False
     debug_logging: bool = False
+    routing_timeout_s: float = 10.0
 
     @property
     def functions_path(self) -> Path:
@@ -421,6 +423,7 @@ def load_config(config_path: Path) -> AppConfig:
             debug_logging=bool(
                 data.get("debug_logging", {}).get("enabled", False)
             ),
+            routing_timeout_s=float(data.get("routing_timeout_s", 10.0)),
         )
     except KeyError as exc:
         raise RuntimeError(f"missing config key: {exc.args[0]}") from exc
@@ -822,7 +825,12 @@ async def qwen_health_check() -> bool:
 
 
 async def call_qwen(messages: list[dict[str, Any]]) -> dict[str, Any]:
-    """Send a non-streaming chat completion request to the local Qwen endpoint."""
+    """Send a non-streaming chat completion request to the local Qwen endpoint.
+
+    Retries once on timeout with a small random jitter to ride out brief
+    routing-model latency spikes (e.g. KV cache warmup). After the retry is
+    exhausted the timeout propagates so the caller can fall back to upstream.
+    """
 
     if STATE.http_client is None or STATE.config is None or STATE.tools is None:
         raise RuntimeError("application state is not initialized")
@@ -842,12 +850,26 @@ async def call_qwen(messages: list[dict[str, Any]]) -> dict[str, Any]:
         "Authorization": f"Bearer {STATE.config.routing.api_key}",
         "Content-Type": "application/json",
     }
-    response = await STATE.http_client.post(
-        f"{STATE.config.routing.base_url.rstrip('/')}/chat/completions",
-        json=payload,
-        headers=headers,
-        timeout=10.0,
-    )
+    url = f"{STATE.config.routing.base_url.rstrip('/')}/chat/completions"
+    timeout_s = STATE.config.routing_timeout_s
+
+    try:
+        response = await STATE.http_client.post(
+            url, json=payload, headers=headers, timeout=timeout_s,
+        )
+    except httpx.TimeoutException as exc:
+        if STATE.logger is not None:
+            STATE.logger.warning("routing model timeout (%.1fs), retrying once", timeout_s)
+        await asyncio.sleep(random.uniform(0.1, 0.5))
+        try:
+            response = await STATE.http_client.post(
+                url, json=payload, headers=headers, timeout=timeout_s,
+            )
+        except httpx.TimeoutException as retry_exc:
+            if STATE.logger is not None:
+                STATE.logger.warning("routing model timeout on retry, giving up")
+            raise retry_exc from exc
+
     response.raise_for_status()
     return response.json()
 
@@ -882,7 +904,7 @@ async def warmup_qwen() -> bool:
             f"{STATE.config.routing.base_url.rstrip('/')}/chat/completions",
             json=payload,
             headers=headers,
-            timeout=10.0,
+            timeout=STATE.config.routing_timeout_s,
         )
         response.raise_for_status()
         return True

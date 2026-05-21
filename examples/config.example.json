@@ -27,6 +27,7 @@
   "scripts_dir": "scripts",
   "max_tool_rounds": 6,
   "tool_exec_timeout_s": 30,
+  "routing_timeout_s": 10.0,
   "debug_logging": {
     "enabled": false
   }

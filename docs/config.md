@@ -37,6 +37,7 @@
 |-----|------|---------|-------------|
 | `max_tool_rounds` | int | `3` | Maximum router-model tool loop iterations before forcing upstream completion |
 | `tool_exec_timeout_s` | int | `30` | Timeout for each local shell script or builtin command execution |
+| `routing_timeout_s` | float | `10.0` | Timeout in seconds for each routing-model HTTP call. On timeout the router retries once with small jitter, then falls back to forwarding the request to upstream |
 | `tools_base_dir` | string | - | Base directory for Python tools invoked by wrapper scripts. Sets `FR_TOOLS_BASE_DIR` env var |
 | `fr_completion_check` | object | `{"enabled": true, "mode": "permissive", "always_true": false}` | Enable router model self-judgment, or force FR-only responses for router-model testing |
 | `fr_context_history` | object | `{"enabled": true}` | Preserve router model context across requests |

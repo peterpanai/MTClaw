@@ -71,8 +71,11 @@ plugins = openclaw.get("plugins", {})
 allow = plugins.get("allow", [])
 if "session-bridge" in allow:
     allow.remove("session-bridge")
+if "fr-tools" in allow:
+    allow.remove("fr-tools")
 entries = plugins.get("entries", {})
 entries.pop("session-bridge", None)
+entries.pop("fr-tools", None)
 
 openclaw_path.write_text(json.dumps(openclaw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 '
@@ -94,6 +97,15 @@ else
   REMOVED_PLUGIN="no (not found)"
 fi
 
+# Remove fr-tools plugin from extensions
+FR_TOOLS_PLUGIN_DST="${HOME}/.openclaw/extensions/fr-tools"
+if [ -d "$FR_TOOLS_PLUGIN_DST" ]; then
+  rm -rf "$FR_TOOLS_PLUGIN_DST"
+  REMOVED_FR_TOOLS_PLUGIN="yes"
+else
+  REMOVED_FR_TOOLS_PLUGIN="no (not found)"
+fi
+
 echo
 echo "Uninstall complete."
 echo "OpenClaw config: $OPENCLAW_CONFIG"
@@ -102,3 +114,4 @@ echo "Removed provider: function_router"
 echo "Restored primary model from upstream config where possible."
 echo "Removed ${TARGET_DIR}: $REMOVED_TARGET"
 echo "Removed session-bridge plugin: $REMOVED_PLUGIN"
+echo "Removed fr-tools plugin: $REMOVED_FR_TOOLS_PLUGIN"

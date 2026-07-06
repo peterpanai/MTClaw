@@ -13,6 +13,9 @@
   "fr_context_preserve": {
     "enabled": false
   },
+  "delegate_tools_to_openclaw": {
+    "enabled": true
+  },
   "routing": {
     "base_url": "https://api.example.com/v1",
     "model": "your-tool-calling-model",

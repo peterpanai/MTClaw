@@ -240,6 +240,8 @@ curl -s http://127.0.0.1:18790/health | jq .
 
 ## OpenClaw Integration Notes
 
+OpenClaw-side tool delegation is enabled by default: Function Router returns `assistant.tool_calls`, the `fr-tools` plugin executes them through Function Router, and OpenClaw stores the real tool history. See [OpenClaw tool delegation](docs/openclaw-tool-delegation.md).
+
 Function Router works as a normal OpenAI-compatible provider even without patching OpenClaw, but there is one important limitation:
 
 - **Without the OpenClaw session-header patch**, FR can still route tools and return final replies.

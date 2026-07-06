@@ -15,6 +15,7 @@ import logging
 import os
 import random
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -155,6 +156,8 @@ class AppConfig:
     fr_context_preserve: bool = False
     debug_logging: bool = False
     routing_timeout_s: float = 10.0
+    delegate_to_openclaw: bool = True
+    delegate_tools: list[str] | None = None
 
     @property
     def functions_path(self) -> Path:
@@ -197,6 +200,7 @@ _QWEN_SAVED_CONTEXTS: dict[str, list[dict[str, Any]]] = {}
 # keyed by caller-provided session id. Each item is a dict with
 # user_text/assistant_text only; tool traces remain in Qwen internal history.
 _QWEN_PENDING_UPSTREAM_TURNS: dict[str, list[dict[str, str]]] = {}
+_SESSION_PENDING_DELEGATED_TOOL_IDS: dict[str, set[str]] = {}
 _LAST_DEBUG_SESSION_KEY: str | None = None
 
 
@@ -217,6 +221,85 @@ def _clear_pending_upstream_turns(session_key: str) -> None:
     """Clear pending upstream-visible turns for one session key."""
 
     _QWEN_PENDING_UPSTREAM_TURNS[session_key] = []
+
+
+def _mark_pending_delegated_tool_calls(
+    session_key: str,
+    tool_calls: list[dict[str, Any]],
+) -> None:
+    """Remember delegated tool call ids that should return as OpenClaw continuations."""
+
+    if not session_key or not tool_calls:
+        return
+    ids = {
+        tool_call.get("id")
+        for tool_call in tool_calls
+        if isinstance(tool_call.get("id"), str) and tool_call.get("id")
+    }
+    if not ids:
+        return
+    bucket = _SESSION_PENDING_DELEGATED_TOOL_IDS.setdefault(session_key, set())
+    bucket.update(ids)
+    _debug_log(
+        "delegated_tool_pending_add",
+        session_key=session_key,
+        tool_call_ids=sorted(ids),
+        pending=len(bucket),
+    )
+
+
+def _observed_tool_call_ids(tool_call_ids: Any = None) -> list[str]:
+    if isinstance(tool_call_ids, str):
+        return [tool_call_ids] if tool_call_ids else []
+    if isinstance(tool_call_ids, (list, tuple, set)):
+        return [item for item in tool_call_ids if isinstance(item, str) and item]
+    return []
+
+
+def _consume_pending_delegated_tool_turn(
+    session_key: str,
+    tool_call_ids: Any = None,
+) -> bool:
+    """Consume pending delegated id(s) for one OpenClaw tool-result continuation."""
+
+    if not session_key:
+        return False
+    bucket = _SESSION_PENDING_DELEGATED_TOOL_IDS.get(session_key)
+    if not bucket:
+        return False
+
+    observed_ids = _observed_tool_call_ids(tool_call_ids)
+    matched_ids = {tool_call_id for tool_call_id in observed_ids if tool_call_id in bucket}
+    if matched_ids:
+        consumed_ids = sorted(matched_ids)
+        bucket.difference_update(matched_ids)
+    else:
+        consumed_ids = [sorted(bucket)[0]]
+        bucket.remove(consumed_ids[0])
+
+    if not bucket:
+        _SESSION_PENDING_DELEGATED_TOOL_IDS.pop(session_key, None)
+    _debug_log(
+        "delegated_tool_pending_consume",
+        session_key=session_key,
+        expected_tool_call_ids=consumed_ids,
+        observed_tool_call_ids=observed_ids,
+        pending=len(bucket),
+    )
+    return True
+
+
+def _clear_pending_delegated_tool_ids(session_key: str) -> None:
+    """Clear remembered delegated tool call ids for one session key."""
+
+    previous = len(_SESSION_PENDING_DELEGATED_TOOL_IDS.get(session_key, set()))
+    _SESSION_PENDING_DELEGATED_TOOL_IDS.pop(session_key, None)
+    if previous:
+        _debug_log(
+            "delegated_tool_pending_clear",
+            session_key=session_key,
+            previous_ids=previous,
+        )
 
 
 def _render_pending_upstream_messages(session_key: str) -> list[dict[str, str]]:
@@ -392,6 +475,30 @@ def load_config(config_path: Path) -> AppConfig:
             raise RuntimeError(
                 f"invalid fr_completion_check.mode in {config_path}: {completion_mode}"
             )
+        delegation_cfg = data.get("delegate_tools_to_openclaw", {"enabled": True})
+        delegate_to_openclaw = True
+        delegate_tools: list[str] | None = None
+        if isinstance(delegation_cfg, bool):
+            delegate_to_openclaw = delegation_cfg
+        elif isinstance(delegation_cfg, dict):
+            delegate_to_openclaw = bool(delegation_cfg.get("enabled", True))
+            configured_tools = delegation_cfg.get("tools")
+            if configured_tools is None:
+                delegate_tools = None
+            elif isinstance(configured_tools, list):
+                delegate_tools = [
+                    tool_name
+                    for tool_name in configured_tools
+                    if isinstance(tool_name, str) and tool_name
+                ] or None
+            else:
+                raise RuntimeError(
+                    f"invalid delegate_tools_to_openclaw.tools in {config_path}"
+                )
+        else:
+            raise RuntimeError(
+                f"invalid delegate_tools_to_openclaw in {config_path}"
+            )
         return AppConfig(
             listen_host=data["listen_host"],
             listen_port=int(data["listen_port"]),
@@ -424,6 +531,8 @@ def load_config(config_path: Path) -> AppConfig:
                 data.get("debug_logging", {}).get("enabled", False)
             ),
             routing_timeout_s=float(data.get("routing_timeout_s", 10.0)),
+            delegate_to_openclaw=delegate_to_openclaw,
+            delegate_tools=delegate_tools,
         )
     except KeyError as exc:
         raise RuntimeError(f"missing config key: {exc.args[0]}") from exc
@@ -949,28 +1058,26 @@ async def execute_tool(function_name: str, arguments_json: str) -> dict[str, Any
     if STATE.config.tools_base_dir:
         env["FR_TOOLS_BASE_DIR"] = STATE.config.tools_base_dir
 
-    process = await asyncio.create_subprocess_exec(
-        "bash",
-        str(script_path),
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-    )
-
-    stdin_bytes = arguments_json.encode("utf-8")
-    try:
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(stdin_bytes),
+    # subprocess.run inside a worker thread keeps the event loop free and,
+    # unlike asyncio.create_subprocess_exec, also works when the loop runs in a
+    # non-main thread (e.g. under Starlette's TestClient).
+    def _run_script() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(script_path)],
+            input=arguments_json,
+            text=True,
+            capture_output=True,
             timeout=STATE.config.tool_exec_timeout_s,
+            env=env,
         )
-    except asyncio.TimeoutError:
-        process.kill()
-        await process.wait()
+
+    try:
+        completed = await asyncio.to_thread(_run_script)
+    except subprocess.TimeoutExpired:
         return {"error": "execution timeout"}
 
-    stderr_text = stderr.decode("utf-8", errors="replace").strip()
-    stdout_text = stdout.decode("utf-8", errors="replace").strip()
+    stderr_text = completed.stderr.strip()
+    stdout_text = completed.stdout.strip()
 
     parsed_output: Any | None = None
     if stdout_text:
@@ -979,17 +1086,17 @@ async def execute_tool(function_name: str, arguments_json: str) -> dict[str, Any
         except json.JSONDecodeError:
             parsed_output = None
 
-    if process.returncode != 0:
+    if completed.returncode != 0:
         logger = logging.getLogger("function_router")
         logger.warning(
             "tool %s failed (rc=%s) stdout=%r stderr=%r",
-            function_name, process.returncode, stdout_text[:500], stderr_text[:500],
+            function_name, completed.returncode, stdout_text[:500], stderr_text[:500],
         )
         if isinstance(parsed_output, dict):
             return parsed_output
         return {
             "error": stderr_text or "script execution failed",
-            "returncode": process.returncode,
+            "returncode": completed.returncode,
             **({"stdout": stdout_text} if stdout_text else {}),
         }
 
@@ -1002,6 +1109,159 @@ async def execute_tool(function_name: str, arguments_json: str) -> dict[str, Any
     if isinstance(parsed_output, dict):
         return parsed_output
     return {"result": parsed_output}
+
+
+def _tool_call_function_name(tool_call: dict[str, Any]) -> str:
+    function_meta = tool_call.get("function") or {}
+    name = function_meta.get("name")
+    return name if isinstance(name, str) else ""
+
+
+def _normalize_tool_call_for_response(
+    tool_call: dict[str, Any],
+    *,
+    fallback_id: str,
+) -> dict[str, Any]:
+    """Return an OpenAI assistant.tool_calls item without rewriting arguments."""
+
+    function_meta = dict(tool_call.get("function") or {})
+    arguments = function_meta.get("arguments")
+    if arguments is None:
+        function_meta["arguments"] = "{}"
+    elif not isinstance(arguments, str):
+        function_meta["arguments"] = json.dumps(
+            arguments,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    return {
+        "id": tool_call.get("id") or fallback_id,
+        "type": tool_call.get("type") or "function",
+        "function": function_meta,
+    }
+
+
+def _tool_calls_are_delegated(
+    tool_calls: list[dict[str, Any]],
+    delegated_tool_names: set[str],
+) -> bool:
+    if not tool_calls or not delegated_tool_names:
+        return False
+    return all(_tool_call_function_name(tool_call) in delegated_tool_names for tool_call in tool_calls)
+
+
+def _delegated_tool_names() -> set[str]:
+    """Return the configured set of tool names to delegate to OpenClaw."""
+
+    if STATE.config is None or not STATE.config.delegate_to_openclaw:
+        return set()
+    if STATE.config.delegate_tools:
+        return set(STATE.config.delegate_tools)
+
+    names: set[str] = set()
+    for tool in STATE.tools or []:
+        if not isinstance(tool, dict):
+            continue
+        function_meta = tool.get("function")
+        if not isinstance(function_meta, dict):
+            continue
+        name = function_meta.get("name")
+        if isinstance(name, str) and name:
+            names.add(name)
+    return names
+
+
+def _find_delegated_tool_continuation(
+    messages: list[dict[str, Any]],
+    delegated_names: set[str],
+) -> tuple[list[dict[str, Any]], list[str]] | None:
+    """Return assistant tool call(s) plus trailing OpenClaw tool result messages."""
+
+    if not messages or not delegated_names:
+        return None
+
+    index = len(messages) - 1
+    if not isinstance(messages[index], dict) or messages[index].get("role") != "tool":
+        return None
+    while index >= 0 and isinstance(messages[index], dict) and messages[index].get("role") == "tool":
+        index -= 1
+    tool_messages = messages[index + 1 :]
+    if not tool_messages:
+        return None
+
+    observed_ids = [
+        message.get("tool_call_id")
+        for message in tool_messages
+        if isinstance(message.get("tool_call_id"), str) and message.get("tool_call_id")
+    ]
+    observed_id_set = set(observed_ids)
+    observed_names = {
+        message.get("name")
+        for message in tool_messages
+        if isinstance(message.get("name"), str) and message.get("name")
+    }
+
+    for previous in reversed(messages[: index + 1]):
+        if not isinstance(previous, dict) or previous.get("role") != "assistant":
+            continue
+        previous_tool_calls = previous.get("tool_calls") or []
+        matched_calls: list[dict[str, Any]] = []
+        for call_index, tool_call in enumerate(previous_tool_calls):
+            if not isinstance(tool_call, dict):
+                continue
+            function_name = _tool_call_function_name(tool_call)
+            if function_name not in delegated_names:
+                continue
+            tool_call_id = tool_call.get("id")
+            if (
+                observed_id_set
+                and isinstance(tool_call_id, str)
+                and tool_call_id
+                and tool_call_id not in observed_id_set
+            ):
+                continue
+            if not observed_id_set and observed_names and function_name not in observed_names:
+                continue
+            matched_calls.append(
+                _normalize_tool_call_for_response(
+                    tool_call,
+                    fallback_id=f"call_{function_name or 'tool'}_{call_index}",
+                )
+            )
+
+        if not matched_calls:
+            continue
+
+        name_by_id = {
+            tool_call.get("id"): _tool_call_function_name(tool_call)
+            for tool_call in matched_calls
+            if isinstance(tool_call.get("id"), str)
+        }
+        matched_names = [
+            _tool_call_function_name(tool_call)
+            for tool_call in matched_calls
+            if _tool_call_function_name(tool_call)
+        ]
+        normalized_tools: list[dict[str, Any]] = []
+        for tool_message in tool_messages:
+            normalized_tool = dict(tool_message)
+            if not normalized_tool.get("name"):
+                tool_call_id = normalized_tool.get("tool_call_id")
+                if isinstance(tool_call_id, str) and tool_call_id in name_by_id:
+                    normalized_tool["name"] = name_by_id[tool_call_id]
+                elif len(matched_names) == 1:
+                    normalized_tool["name"] = matched_names[0]
+            normalized_tools.append(normalized_tool)
+
+        assistant_message = {
+            "role": "assistant",
+            "content": previous.get("content") or "",
+            "tool_calls": matched_calls,
+        }
+        return [assistant_message, *normalized_tools], observed_ids
+
+    return None
 
 
 @dataclass(slots=True)
@@ -1025,12 +1285,15 @@ class ToolLoopResult:
     # Per-LLM-call timing records (one entry per call_qwen invocation).
     # Each entry: {kind, round, request_timestamp, response_timestamp, model}
     llm_calls: list[dict[str, Any]] = field(default_factory=list)
+    delegated_tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
 
 async def run_tool_loop(
     user_text: str,
     *,
     history: list[dict[str, Any]] | None = None,
+    delegated_tool_names: set[str] | None = None,
+    resume_tool_context: list[dict[str, Any]] | None = None,
 ) -> ToolLoopResult:
     """Run the Qwen tool selection and execution loop.
 
@@ -1057,6 +1320,23 @@ async def run_tool_loop(
     max_rounds = STATE.config.max_tool_rounds if STATE.config else 0
     routing_model_name = STATE.config.routing.model if STATE.config else ""
     llm_calls: list[dict[str, Any]] = []
+    delegated_tool_names = set(delegated_tool_names or ())
+
+    if resume_tool_context:
+        messages.extend(dict(message) for message in resume_tool_context)
+        last_tool_message = messages[-1] if messages and messages[-1].get("role") == "tool" else None
+        if isinstance(last_tool_message, dict):
+            tool_name = last_tool_message.get("name")
+            if isinstance(tool_name, str) and tool_name:
+                last_function_name = tool_name
+        for message in reversed(resume_tool_context):
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+            tool_calls = message.get("tool_calls") or []
+            if tool_calls:
+                last_function_name = _tool_call_function_name(tool_calls[-1]) or last_function_name
+                break
+        used_any_tool = True
 
     _debug_log_messages("QWEN", messages, offset=current_turn_offset)
 
@@ -1140,6 +1420,29 @@ async def run_tool_loop(
                 qwen_reply=content or None,
                 _loop_messages=messages,
                 llm_calls=llm_calls,
+            )
+
+        if _tool_calls_are_delegated(tool_calls, delegated_tool_names):
+            delegated_tool_calls = [
+                _normalize_tool_call_for_response(
+                    tool_call,
+                    fallback_id=f"call_{_tool_call_function_name(tool_call) or 'tool'}_{round_index}_{index}",
+                )
+                for index, tool_call in enumerate(tool_calls)
+            ]
+            assistant_message["tool_calls"] = delegated_tool_calls
+            messages[-1] = assistant_message
+            last_function_name = _tool_call_function_name(delegated_tool_calls[-1]) or last_function_name
+            return ToolLoopResult(
+                used_any_tool=True,
+                last_function_name=last_function_name,
+                tool_rounds=round_index,
+                tool_context=messages[1:],
+                max_rounds_exhausted=False,
+                qwen_reply=None,
+                _loop_messages=messages,
+                llm_calls=llm_calls,
+                delegated_tool_calls=delegated_tool_calls,
             )
 
         used_any_tool = True
@@ -1366,6 +1669,82 @@ def _build_completion_response(
 
     async def sse_stream():
         yield f"data: {chunk}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        sse_stream(),
+        media_type="text/event-stream",
+    )
+
+
+def _build_tool_calls_response(
+    tool_calls: list[dict[str, Any]],
+    *,
+    stream: bool = False,
+) -> JSONResponse | StreamingResponse:
+    """Build an OpenAI-compatible assistant.tool_calls response."""
+
+    completion_id = f"fr-{uuid.uuid4().hex[:12]}"
+    created = int(time.time())
+    normalized_tool_calls = [
+        _normalize_tool_call_for_response(
+            tool_call,
+            fallback_id=f"call_{_tool_call_function_name(tool_call) or 'tool'}_{index}",
+        )
+        for index, tool_call in enumerate(tool_calls)
+    ]
+
+    if not stream:
+        return JSONResponse({
+            "id": completion_id,
+            "object": "chat.completion",
+            "created": created,
+            "model": "function-router",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": normalized_tool_calls,
+                },
+                "finish_reason": "tool_calls",
+            }],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        })
+
+    delta_tool_calls = [
+        {"index": index, **tool_call}
+        for index, tool_call in enumerate(normalized_tool_calls)
+    ]
+    first_chunk = json.dumps({
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": "function-router",
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "role": "assistant",
+                "tool_calls": delta_tool_calls,
+            },
+            "finish_reason": None,
+        }],
+    }, ensure_ascii=False)
+    finish_chunk = json.dumps({
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": "function-router",
+        "choices": [{
+            "index": 0,
+            "delta": {},
+            "finish_reason": "tool_calls",
+        }],
+    }, ensure_ascii=False)
+
+    async def sse_stream():
+        yield f"data: {first_chunk}\n\n"
+        yield f"data: {finish_chunk}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(
@@ -1662,6 +2041,13 @@ async def startup_event() -> None:
     STATE.logger = logger
     STATE.config = config
     STATE.tools = load_tools(config.functions_path)
+    try:
+        (config.root_dir / "openclaw-tools.json").write_text(
+            json.dumps({"tools": STATE.tools}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.warning("failed to write openclaw tools snapshot: %s", exc)
     STATE.http_client = await build_http_client()
     STATE.warmup_ok = await warmup_qwen()
 
@@ -1734,6 +2120,34 @@ async def get_tool_history(since: str | None = None, limit: int = 50) -> JSONRes
     return JSONResponse({"entries": entries})
 
 
+@app.get("/v1/tools")
+async def list_tools() -> JSONResponse:
+    """Return loaded OpenAI-compatible tool definitions."""
+
+    return JSONResponse({"tools": STATE.tools or []})
+
+
+@app.post("/v1/execute_tool")
+async def execute_tool_endpoint(payload: dict[str, Any]) -> JSONResponse:
+    """Execute one loaded Function Router tool for OpenClaw-side delegation."""
+
+    name = payload.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise HTTPException(status_code=400, detail="name must be a non-empty string")
+    name = name.strip()
+
+    arguments = payload.get("arguments", {})
+    if isinstance(arguments, str):
+        arguments_json = arguments
+    elif isinstance(arguments, dict):
+        arguments_json = json.dumps(arguments, ensure_ascii=False)
+    else:
+        raise HTTPException(status_code=400, detail="arguments must be an object or JSON string")
+
+    result = await execute_tool(name, arguments_json)
+    return JSONResponse({"name": name, "result": result})
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request) -> StreamingResponse:
     """Handle OpenAI-compatible chat completion requests."""
@@ -1772,6 +2186,16 @@ async def chat_completions(request: Request) -> StreamingResponse:
             message_count=len(messages),
             has_stream=original_request.get("stream", False),
         )
+        delegated_names = _delegated_tool_names()
+        parsed_delegated_continuation = _find_delegated_tool_continuation(
+            messages,
+            delegated_names,
+        )
+        delegated_continuation = None
+        if parsed_delegated_continuation is not None:
+            _, tool_call_ids = parsed_delegated_continuation
+            if _consume_pending_delegated_tool_turn(session_key, tool_call_ids):
+                delegated_continuation = parsed_delegated_continuation
         if not user_text:
             if _fr_only_mode():
                 return _build_completion_response(
@@ -1868,7 +2292,7 @@ async def chat_completions(request: Request) -> StreamingResponse:
         # 如果最后一条是assistant或tool，说明是豆包自己在处理或工具在返回，
         # 不应该再调用Qwen（否则会用之前的user消息重复调用）
         last_role = messages[-1].get("role") if messages else None
-        if last_role and last_role != "user":
+        if last_role and last_role != "user" and delegated_continuation is None:
             if _fr_only_mode():
                 return _build_completion_response(
                     _last_assistant_text(messages),
@@ -1927,7 +2351,13 @@ async def chat_completions(request: Request) -> StreamingResponse:
         try:
             result = await run_tool_loop(
                 user_text,
-            history=(list(_get_saved_context(session_key)) or None) if ctx_enabled else None,
+                history=(list(_get_saved_context(session_key)) or None) if ctx_enabled else None,
+                delegated_tool_names=(delegated_names or None),
+                resume_tool_context=(
+                    delegated_continuation[0]
+                    if delegated_continuation is not None
+                    else None
+                ),
             )
             function_name = result.last_function_name
             tool_rounds = result.tool_rounds
@@ -2054,6 +2484,29 @@ async def chat_completions(request: Request) -> StreamingResponse:
                 latency_ms=round((time.perf_counter() - started_at) * 1000, 2),
             )
             return response
+        if result.delegated_tool_calls:
+            _mark_pending_delegated_tool_calls(session_key, result.delegated_tool_calls)
+            log_request(
+                user_message=user_text,
+                route="function",
+                function_name=function_name,
+                tool_rounds=tool_rounds,
+                latency_ms=(time.perf_counter() - started_at) * 1000,
+                status="delegated_tool_call",
+            )
+            _debug_log(
+                "route_decision",
+                session_key=session_key,
+                route="function",
+                status="delegated_tool_call",
+                function_name=function_name,
+                tool_rounds=tool_rounds,
+                latency_ms=round((time.perf_counter() - started_at) * 1000, 2),
+            )
+            return _build_tool_calls_response(
+                result.delegated_tool_calls,
+                stream=original_request.get("stream", False),
+            )
         # Tools were used — check if Qwen judges the task complete (short-circuit)
         # or fall through to upstream (Doubao) for the final response.
         if (
@@ -2073,7 +2526,11 @@ async def chat_completions(request: Request) -> StreamingResponse:
                         STATE.logger.info(
                             "saved context[%s]: %d messages", session_key, len(_get_saved_context(session_key)),
                         )
-                if user_text and result.qwen_reply:
+                # Delegated continuation turns are already fully persisted by
+                # OpenClaw (user, assistant.tool_calls, tool result, and this
+                # reply) — queueing a pending plain-text turn would inject a
+                # duplicate copy into future upstream requests.
+                if user_text and result.qwen_reply and delegated_continuation is None:
                     _append_pending_upstream_turn(session_key, user_text, result.qwen_reply)
                 _record_tool_history(
                     user_text,
@@ -2107,7 +2564,7 @@ async def chat_completions(request: Request) -> StreamingResponse:
         if _fr_only_mode():
             if ctx_enabled and result._loop_messages:
                 _set_saved_context(session_key, result._loop_messages[1:])
-            if user_text and result.qwen_reply:
+            if user_text and result.qwen_reply and delegated_continuation is None:
                 _append_pending_upstream_turn(session_key, user_text, result.qwen_reply)
             _record_tool_history(
                 user_text,

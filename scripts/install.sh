@@ -283,6 +283,16 @@ if [ -d "$PLUGIN_SRC" ]; then
   echo "已安装 session-bridge 插件到 $PLUGIN_DST"
 fi
 
+FR_TOOLS_PLUGIN_SRC="$REPO_ROOT/plugins/fr-tools"
+FR_TOOLS_PLUGIN_DST="${HOME}/.openclaw/extensions/fr-tools"
+if [ -d "$FR_TOOLS_PLUGIN_SRC" ]; then
+  mkdir -p "$(dirname "$FR_TOOLS_PLUGIN_DST")"
+  rm -rf "$FR_TOOLS_PLUGIN_DST"
+  cp -r "$FR_TOOLS_PLUGIN_SRC" "$FR_TOOLS_PLUGIN_DST"
+  echo "Installed fr-tools plugin to $FR_TOOLS_PLUGIN_DST"
+  echo "已安装 fr-tools 插件到 $FR_TOOLS_PLUGIN_DST"
+fi
+
 ROUTING_BASE_URL="$ROUTING_BASE_URL" \
 ROUTING_MODEL="$ROUTING_MODEL" \
 ROUTING_API_KEY="$ROUTING_API_KEY" \
@@ -310,6 +320,26 @@ data["upstream"]["api_key"] = os.environ["UPSTREAM_API_KEY"]
 data["upstream"]["model"] = os.environ["UPSTREAM_MODEL"]
 path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 '
+
+REPO_ROOT="$REPO_ROOT" \
+FUNCTIONS_PATH="$FUNCTIONS_PATH" \
+TARGET_DIR="$TARGET_DIR" \
+python3 -c '
+import json
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.environ["REPO_ROOT"])
+from function_router.server import load_tools
+
+functions_path = Path(os.environ["FUNCTIONS_PATH"])
+target_path = Path(os.environ["TARGET_DIR"]) / "openclaw-tools.json"
+target_path.write_text(
+    json.dumps({"tools": load_tools(functions_path)}, ensure_ascii=False, indent=2) + "\n",
+    encoding="utf-8",
+)
+' || echo "Warning: failed to generate initial openclaw-tools.json snapshot." >&2
 
 mkdir -p "$(dirname "$OPENCLAW_CONFIG")"
 if [ ! -f "$OPENCLAW_CONFIG" ]; then
@@ -349,8 +379,11 @@ plugins = data.setdefault("plugins", {})
 allow = plugins.setdefault("allow", [])
 if "session-bridge" not in allow:
     allow.append("session-bridge")
+if "fr-tools" not in allow:
+    allow.append("fr-tools")
 entries = plugins.setdefault("entries", {})
 entries["session-bridge"] = {"enabled": True}
+entries["fr-tools"] = {"enabled": True}
 
 path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 '
@@ -378,3 +411,5 @@ echo "Router base_url: $ROUTER_BASE_URL"
 echo "Router 地址: $ROUTER_BASE_URL"
 echo "Session bridge plugin: $PLUGIN_DST"
 echo "Session bridge 插件: $PLUGIN_DST"
+echo "FR tools plugin: $FR_TOOLS_PLUGIN_DST"
+echo "FR tools 插件: $FR_TOOLS_PLUGIN_DST"

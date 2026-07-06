@@ -873,16 +873,16 @@ def _extract_transcript_message(text: str) -> str:
 def _strip_openclaw_metadata(text: str) -> str:
     """Strip OpenClaw-injected metadata, returning only the raw user input."""
 
-    wrapped_text = _extract_last_session_echo_for_wrappers(text)
-    if wrapped_text is not None:
-        text = wrapped_text
-
     text = _MEMORIES_RE.sub("", text)
     text = _INGEST_REPLY_ASSIST_RE.sub(" ", text)
     text = _SENDER_RE.sub("", text)
     text = _CONVERSATION_INFO_RE.sub("", text)
-    text = _TIMESTAMP_RE.sub("", text)
     text = _WORKSPACE_BOOTSTRAP_RE.sub("", text)
+    text = _extract_transcript_message(text.strip())
+    wrapped_text = _extract_last_session_echo_for_wrappers(text)
+    if wrapped_text is not None:
+        text = wrapped_text
+    text = _TIMESTAMP_RE.sub("", text)
     text = _drop_bracket_wrappers(text)
     text = re.sub(r"^\s*:\s*", "", text)
     text = re.sub(r"\s+", " ", text).strip()

@@ -210,6 +210,8 @@ def test_load_config_default_routing_timeout(tmp_path: Path) -> None:
     config = load_config(config_path)
 
     assert config.routing_timeout_s == 10.0
+    assert config.delegate_to_openclaw is True
+    assert config.delegate_tools is None
 
 
 def test_load_config_custom_routing_timeout(tmp_path: Path) -> None:
@@ -221,3 +223,42 @@ def test_load_config_custom_routing_timeout(tmp_path: Path) -> None:
     config = load_config(config_path)
 
     assert config.routing_timeout_s == 20.0
+
+
+def test_load_config_accepts_delegation_disabled_bool(tmp_path: Path) -> None:
+    payload = valid_config_payload()
+    payload["delegate_tools_to_openclaw"] = False
+    config_path = tmp_path / "config.json"
+    write_json(config_path, payload)
+
+    config = load_config(config_path)
+
+    assert config.delegate_to_openclaw is False
+    assert config.delegate_tools is None
+
+
+def test_load_config_accepts_delegation_disabled_object(tmp_path: Path) -> None:
+    payload = valid_config_payload()
+    payload["delegate_tools_to_openclaw"] = {"enabled": False}
+    config_path = tmp_path / "config.json"
+    write_json(config_path, payload)
+
+    config = load_config(config_path)
+
+    assert config.delegate_to_openclaw is False
+    assert config.delegate_tools is None
+
+
+def test_load_config_accepts_delegation_tool_subset(tmp_path: Path) -> None:
+    payload = valid_config_payload()
+    payload["delegate_tools_to_openclaw"] = {
+        "enabled": True,
+        "tools": ["alpha", "beta"],
+    }
+    config_path = tmp_path / "config.json"
+    write_json(config_path, payload)
+
+    config = load_config(config_path)
+
+    assert config.delegate_to_openclaw is True
+    assert config.delegate_tools == ["alpha", "beta"]

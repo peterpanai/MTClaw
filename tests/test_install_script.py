@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 
-REPO_ROOT = Path("/home/mt/zhenlin.liang/agent/git/openclaw-function-router")
+REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "install.sh"
 
 
@@ -29,6 +29,21 @@ def run_install(tmp_path: Path, user_input: str) -> subprocess.CompletedProcess[
 
 def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def assert_openclaw_plugins_installed(home_dir: Path, openclaw_config: Path) -> None:
+    openclaw = load_json(openclaw_config)
+    plugins = openclaw["plugins"]
+    assert "session-bridge" in plugins["allow"]
+    assert "fr-tools" in plugins["allow"]
+    assert plugins["entries"]["session-bridge"] == {"enabled": True}
+    assert plugins["entries"]["fr-tools"] == {"enabled": True}
+    assert (home_dir / ".openclaw" / "extensions" / "session-bridge" / "index.ts").exists()
+    assert (home_dir / ".openclaw" / "extensions" / "fr-tools" / "index.ts").exists()
+
+    snapshot = load_json(home_dir / ".function-router" / "openclaw-tools.json")
+    assert isinstance(snapshot["tools"], list)
+    assert snapshot["tools"]
 
 
 def test_install_uses_existing_openclaw_primary_as_upstream_default(tmp_path: Path) -> None:
@@ -88,6 +103,7 @@ def test_install_uses_existing_openclaw_primary_as_upstream_default(tmp_path: Pa
         "api_key": "existing-secret",
         "model": "doubao-seed-2-0-pro",
     }
+    assert_openclaw_plugins_installed(tmp_path / "home", openclaw_config)
 
 
 def test_install_prompts_for_upstream_when_declining_existing_primary(tmp_path: Path) -> None:
@@ -146,6 +162,7 @@ def test_install_prompts_for_upstream_when_declining_existing_primary(tmp_path: 
         "api_key": "custom-secret",
         "model": "custom-model",
     }
+    assert_openclaw_plugins_installed(tmp_path / "home", openclaw_config)
 
 
 def test_reinstall_uses_existing_function_router_upstream_as_default(tmp_path: Path) -> None:
@@ -234,3 +251,4 @@ def test_reinstall_uses_existing_function_router_upstream_as_default(tmp_path: P
         "api_key": "existing-secret",
         "model": "doubao-seed-2-0-pro",
     }
+    assert_openclaw_plugins_installed(home_dir, openclaw_config)

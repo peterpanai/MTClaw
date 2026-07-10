@@ -1,0 +1,44 @@
+{
+  "name": "openclaw-fr-tools-plugin",
+  "version": "0.1.0",
+  "description": "Registers MTClaw Function Router tools in OpenClaw and delegates execution back to the router.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "smoke": "node test/smoke.mjs"
+  },
+  "files": [
+    "index.ts",
+    "openclaw.plugin.json",
+    "dist"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MooreThreads/MTClaw.git",
+    "directory": "plugins/fr-tools"
+  },
+  "homepage": "https://github.com/MooreThreads/MTClaw",
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "function-router",
+    "tools",
+    "mtclaw"
+  ],
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "runtimeExtensions": [
+      "./dist/index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.3.24"
+    },
+    "build": {
+      "openclawVersion": "2026.3.24"
+    }
+  }
+}

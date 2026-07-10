@@ -42,6 +42,7 @@
 | `fr_completion_check` | object | `{"enabled": true, "mode": "permissive", "always_true": false}` | Enable router model self-judgment, or force FR-only responses for router-model testing |
 | `fr_context_history` | object | `{"enabled": true}` | Preserve router model context across requests |
 | `fr_context_preserve` | object | `{"enabled": false}` | Never clear saved context automatically |
+| `delegate_tools_to_openclaw` | bool or object | `{"enabled": true}` | Delegate router-selected tool calls back to OpenClaw so OpenClaw executes and persists real tool-call history |
 | `debug_logging` | object | `{"enabled": false}` | Enable detailed transcript-style debug logs |
 
 ### fr_completion_check
@@ -56,6 +57,26 @@ When enabled, after the router model successfully calls and executes tools, the 
 
 This typically reduces latency from ~5s to ~1s for simple tool operations. Setting `always_true: true` is mainly for testing the router model in isolation: it removes upstream from the path and trusts the router reply unconditionally.
 
+### delegate_tools_to_openclaw
+
+Delegation is enabled by default. When the routing model selects a delegated tool, Function Router returns `assistant.tool_calls` with `finish_reason="tool_calls"` instead of executing the tool internally. OpenClaw then runs the matching `fr-tools` plugin tool, stores the assistant tool call and `role=tool` result in its own session history, and calls Function Router again. Function Router detects the trailing tool-result continuation and resumes the normal completion-check/upstream flow.
+
+Accepted forms:
+
+```json
+{
+  "delegate_tools_to_openclaw": {
+    "enabled": true,
+    "tools": ["system_control", "find"]
+  }
+}
+```
+
+- Omit the key, or set `{"enabled": true}`: delegate all loaded tools.
+- Set `tools` to a non-empty list: delegate only those tool names; other tools still execute inside Function Router.
+- Set `false` or `{"enabled": false}`: disable delegation and execute tools inside Function Router as before.
+
+Non-tool-capable OpenAI clients should set `delegate_tools_to_openclaw` to `false`, because they cannot execute the returned `assistant.tool_calls`.
 
 ### fr_context_history
 
@@ -147,6 +168,9 @@ For upstream handoff, Function Router logs only the FR-managed pending context, 
   },
   "fr_context_preserve": {
     "enabled": false
+  },
+  "delegate_tools_to_openclaw": {
+    "enabled": true
   },
   "debug_logging": {
     "enabled": false

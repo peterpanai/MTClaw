@@ -242,6 +242,8 @@ curl -s http://127.0.0.1:18790/health | jq .
 
 ## OpenClaw 集成说明
 
+OpenClaw-side tool delegation 默认开启：Function Router 返回 `assistant.tool_calls`，`fr-tools` plugin 通过 Function Router 执行工具，OpenClaw 保存真实工具历史。详见 [OpenClaw tool delegation](docs/openclaw-tool-delegation.md)。
+
 即使不 patch OpenClaw，Function Router 也可以作为普通 OpenAI-compatible provider 工作，但有一个重要限制：
 
 - **没有 OpenClaw session-header patch 时**，Function Router 仍然可以路由工具并返回最终回复。

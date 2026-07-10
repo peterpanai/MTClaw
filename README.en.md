@@ -368,6 +368,25 @@ scripts/           Install, uninstall, and restart helpers
 tests/             Offline pytest suite
 ```
 
+## Media Player State Machine (branch feature)
+
+> Available on the [`feature/media-lifecycle`](https://github.com/MooreThreads/MTClaw/tree/feature/media-lifecycle) branch.
+
+For media-playback control workloads, Function Router provides a per-session **media playback lifecycle state machine** that automatically switches the tool set the routing model sees between "player closed" and "player open":
+
+- **basic mode (player closed)**: the request **bypasses the routing model** and is forwarded straight to the upstream / OpenClaw for search and playback discovery — no routing-model inference, no extra latency.
+- **full mode (player open)**: the routing model is engaged and fast-paths control commands such as pause / resume / seek / forward / volume / speed / fullscreen locally.
+
+Transitions are driven by **two-sided monitoring** — it watches both the tool calls in OpenClaw's replayed history and the result of Function Router's own tool loop:
+
+- observing a `play` → switch to full mode (load the control tool set);
+- observing a `close` → switch back to basic mode (unload the control tool set);
+- new playback (`play`) is always executed by the upstream / OpenClaw discovery flow — Function Router only **observes** that a play happened and never executes or delegates play itself.
+
+Because play / close events are persisted as real tool calls in OpenClaw's session history, the state machine rebuilds itself from the replayed history every turn, so **state survives Function Router restarts**.
+
+See the `media_lifecycle` section of [`docs/config.md`](https://github.com/MooreThreads/MTClaw/blob/feature/media-lifecycle/docs/config.md) on that branch (disabled by default in code; the branch's example config enables it for a media-focused deployment).
+
 ## Configuration
 
 See [docs/config.md](docs/config.md) for the full configuration reference.

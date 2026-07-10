@@ -374,6 +374,25 @@ scripts/           安装、卸载和重启脚本
 tests/             离线 pytest 测试集
 ```
 
+## 媒体播放状态机（分支功能）
+
+> 该功能在 [`feature/media-lifecycle`](https://github.com/MooreThreads/MTClaw/tree/feature/media-lifecycle) 分支提供。
+
+面向媒体播放控制的垂类场景，Function Router 提供一个按会话维护的**播放生命周期状态机**，在「播放器未打开」与「播放器已打开」之间自动切换路由模型看到的工具集：
+
+- **basic 模式（播放器未打开）**：请求**不经过路由模型**，直接透传给上游 / OpenClaw 去做搜索与播放发现；路由模型不做任何推理，零额外开销。
+- **full 模式（播放器已打开）**：路由模型被激活，对「暂停 / 继续 / 快进 / 跳转 / 音量 / 倍速 / 全屏」等控制指令走本地快路径路由。
+
+状态切换由**双向监控**驱动——同时观察 OpenClaw 回放历史里的工具调用与 Function Router 自身工具循环的结果：
+
+- 观察到 `play` → 切换到 full 模式（加载控制工具集）；
+- 观察到 `close` → 切换回 basic 模式（卸载控制工具集）；
+- 新的播放（`play`）永远由上游 / OpenClaw 的发现流程执行，Function Router 只**观察**播放发生、从不自己执行或委派播放。
+
+由于播放 / 关闭事件以真实工具调用的形式持久化在 OpenClaw 的会话历史中，状态机每一轮都能从回放历史重建，**Function Router 重启后状态不丢失**。
+
+配置见该分支 [`docs/config.md`](https://github.com/MooreThreads/MTClaw/blob/feature/media-lifecycle/docs/config.md) 的 `media_lifecycle` 段（代码默认关闭；分支的示例配置为媒体专用部署默认开启）。
+
 ## 配置
 
 完整配置参考见 [docs/config.md](docs/config.md)。

@@ -24,3 +24,4 @@ env/
 .idea/
 .vscode/
 .DS_Store
+subagents/memory/data/

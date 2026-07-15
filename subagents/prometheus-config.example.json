@@ -35,7 +35,7 @@
     "enabled": true
   },
   "prometheus": {
-    "data_dir": "~/.prometheus/data",
+    "data_dir": "~/.function-router/prometheus/data",
     "model_path": "",
     "model_name": "BAAI/bge-m3",
     "rag_chunk_size": 512,

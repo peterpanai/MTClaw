@@ -10,7 +10,7 @@ TARGET_DIR="${HOME}/.function-router"
 CONFIG_PATH="${TARGET_DIR}/config.json"
 FUNCTIONS_PATH="${TARGET_DIR}/functions.jsonl"
 SCRIPTS_DIR="${TARGET_DIR}/scripts"
-PROMETHEUS_DATA="${HOME}/.prometheus"
+PROMETHEUS_DATA="${HOME}/.function-router/prometheus"
 
 echo "=== Prometheus Subagent 安装 ==="
 echo ""

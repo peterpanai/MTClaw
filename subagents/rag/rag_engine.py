@@ -13,9 +13,9 @@ Tools exposed (selected via argv[1]):
   - rag_status  : Report collection statistics
 
 Usage:
-  echo '{"query":"GPU算力","top_k":5}' | python3 rag_engine.py rag_search --data-dir ~/.prometheus/data
-  echo '{"path":"~/notes","recursive":true}' | python3 rag_engine.py rag_ingest --data-dir ~/.prometheus/data
-  echo '{}' | python3 rag_engine.py rag_status --data-dir ~/.prometheus/data
+  echo '{"query":"GPU算力","top_k":5}' | python3 rag_engine.py rag_search --data-dir ~/.function-router/prometheus/data
+  echo '{"path":"~/notes","recursive":true}' | python3 rag_engine.py rag_ingest --data-dir ~/.function-router/prometheus/data
+  echo '{}' | python3 rag_engine.py rag_status --data-dir ~/.function-router/prometheus/data
 
 Input is JSON on stdin; output is JSON on stdout (compatible with MTClaw FR execute_tool).
 """
@@ -626,7 +626,7 @@ def main():
     parser = argparse.ArgumentParser(description="RAG Engine for MTClaw Function Router")
     parser.add_argument("tool", choices=["rag_search", "rag_ingest", "rag_status"],
                         help="Tool to execute")
-    parser.add_argument("--data-dir", default=os.environ.get("RAG_DATA_DIR", "~/.prometheus/data"),
+    parser.add_argument("--data-dir", default=os.environ.get("RAG_DATA_DIR", "~/.function-router/prometheus/data"),
                         help="Data directory for ChromaDB and BM25 index")
     args = parser.parse_args()
 

@@ -16,7 +16,7 @@ from pathlib import Path
 
 DATA_DIR = os.environ.get(
     "PROMETHEUS_DATA_DIR",
-    os.path.expanduser("~/.prometheus/data"),
+    os.path.expanduser("~/.function-router/prometheus/data"),
 )
 DB_PATH = os.path.join(DATA_DIR, "prometheus.db")
 

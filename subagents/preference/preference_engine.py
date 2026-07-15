@@ -40,8 +40,8 @@ STRONG_PATTERNS = [
 
 # 弱偏好信号（需要累积确认）
 WEAK_SIGNALS = {
-    "format": [re.compile(r"(?:用|使用|格式)(?:Markdown|markdown|MD|md|纯文本|JSON|json)")],
-    "language": [re.compile(r"(?:用|使用)(?:中文|英文|日语|韩语)")],
+    "format": [re.compile(r"(?:用|使用|格式).*(?:Markdown|markdown|MD|md|纯文本|JSON|json)")],
+    "language": [re.compile(r"(?:用|使用).*(?:中文|英文|日语|韩语)")],
     "style": [re.compile(r"(?:简洁|详细|正式|随意|口语化|书面)")],
 }
 

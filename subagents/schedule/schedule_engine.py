@@ -27,22 +27,31 @@ _dateparser = None
 
 def parse_time(time_str: str) -> str | None:
     """解析中文自然语言时间，返回 ISO 8601 字符串。"""
+    if not time_str or not time_str.strip():
+        return None
+
     global _dateparser
     if _dateparser is None:
         try:
             import dateparser
             _dateparser = dateparser
         except ImportError:
-            # fallback: 简单正则解析
             return _fallback_parse(time_str)
 
+    # dateparser 用 languages 参数而非 settings 中的 LANGUAGE/LANGUAGES
     settings = {
         "PREFER_DATES_FROM": "future",
         "TIMEZONE": "Asia/Shanghai",
         "RETURN_AS_TIMEZONE_AWARE": True,
-        "LANGUAGE": "zh",
     }
-    result = _dateparser.parse(time_str, settings=settings)
+    try:
+        result = _dateparser.parse(time_str, languages=["zh"], settings=settings)
+    except Exception:
+        try:
+            result = _dateparser.parse(time_str, settings=settings)
+        except Exception:
+            result = None
+
     if result:
         return result.isoformat()
     return _fallback_parse(time_str)

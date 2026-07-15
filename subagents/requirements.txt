@@ -1,0 +1,19 @@
+# RAG Subagent dependencies
+# Core retrieval stack: ChromaDB + BGE-M3 + BM25 + jieba
+
+# Vector database - persistent local storage for dense embeddings
+chromadb>=0.5.0
+
+# Embedding model - BGE-M3 (1024d, multilingual, 8192 tokens)
+# Includes sentence-transformers and transformers as dependencies
+sentence-transformers>=2.7.0
+
+# BM25 sparse retrieval - lightweight pure-Python implementation
+rank_bm25>=0.2.2
+
+# Chinese word segmentation for BM25 tokenization
+jieba>=0.42.1
+
+# Document parsing (optional - only needed for PDF/DOCX ingestion)
+pymupdf>=1.24.0
+python-docx>=1.1.0

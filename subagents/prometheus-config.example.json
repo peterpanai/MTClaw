@@ -1,0 +1,46 @@
+{
+  "listen_host": "0.0.0.0",
+  "listen_port": 18790,
+  "tools_base_dir": "~/.function-router/scripts",
+  "fr_completion_check": {
+    "enabled": true,
+    "mode": "permissive",
+    "always_true": false
+  },
+  "fr_context_history": {
+    "enabled": true
+  },
+  "fr_context_preserve": {
+    "enabled": false
+  },
+  "delegate_tools_to_openclaw": {
+    "enabled": false
+  },
+  "routing": {
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat",
+    "api_key": "${ROUTING_API_KEY}"
+  },
+  "upstream": {
+    "base_url": "https://api.deepseek.com/v1",
+    "api_key": "${UPSTREAM_API_KEY}",
+    "model": "deepseek-chat"
+  },
+  "functions_file": "functions.jsonl",
+  "scripts_dir": "scripts",
+  "max_tool_rounds": 8,
+  "tool_exec_timeout_s": 60,
+  "routing_timeout_s": 10.0,
+  "debug_logging": {
+    "enabled": true
+  },
+  "prometheus": {
+    "data_dir": "~/.prometheus/data",
+    "model_path": "",
+    "model_name": "BAAI/bge-m3",
+    "rag_chunk_size": 512,
+    "rag_chunk_overlap": 64,
+    "rag_top_k": 5,
+    "rrf_k": 60
+  }
+}

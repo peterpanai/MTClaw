@@ -1,0 +1,1 @@
+{"name":"chat_light","description":"轻量闲聊。日常寒暄、讲笑话、心情倾诉、简单知识问答。Router 检测到纯粹对话意图时触发。","parameters":{"type":"object","properties":{"mood":{"type":"string","enum":["casual","humor","comfort","curious","auto"],"description":"对话风格"},"memory_inject":{"type":"boolean","description":"是否注入用户的长期记忆上下文，默认true"}},"required":[]}}

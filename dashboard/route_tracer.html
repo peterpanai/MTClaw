@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prometheus 路由追踪面板</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
+h1 { color: #58a6ff; margin-bottom: 20px; font-size: 1.5em; }
+.stats { display: flex; gap: 15px; margin-bottom: 20px; }
+.stat-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 15px 20px; min-width: 120px; }
+.stat-card .label { color: #8b949e; font-size: 0.8em; text-transform: uppercase; }
+.stat-card .value { color: #58a6ff; font-size: 1.8em; font-weight: bold; margin-top: 5px; }
+#history { display: flex; flex-direction: column; gap: 10px; }
+.entry { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 15px; }
+.entry:hover { border-color: #58a6ff; }
+.entry-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.entry-time { color: #8b949e; font-size: 0.85em; }
+.entry-route { font-weight: bold; padding: 2px 10px; border-radius: 12px; font-size: 0.85em; }
+.route-complete { background: #1a7f37; color: #fff; }
+.route-incomplete { background: #d29922; color: #fff; }
+.route-error { background: #da3633; color: #fff; }
+.route-upstream { background: #6e7681; color: #fff; }
+.entry-message { color: #c9d1d9; margin-bottom: 5px; }
+.entry-detail { color: #8b949e; font-size: 0.85em; display: flex; gap: 20px; }
+.entry-detail span { white-space: nowrap; }
+.latency-bar { display: inline-block; width: 60px; height: 6px; background: #30363d; border-radius: 3px; margin-left: 5px; vertical-align: middle; }
+.latency-fill { height: 100%; border-radius: 3px; }
+.latency-fast { background: #1a7f37; }
+.latency-medium { background: #d29922; }
+.latency-slow { background: #da3633; }
+#refresh { float: right; color: #58a6ff; cursor: pointer; font-size: 0.85em; }
+#refresh:hover { text-decoration: underline; }
+.empty { color: #8b949e; text-align: center; padding: 40px; }
+</style>
+</head>
+<body>
+<h1>🤖 Prometheus 路由追踪面板 <span id="refresh" onclick="loadData()">↻ 刷新</span></h1>
+<div class="stats" id="stats"></div>
+<div id="history"></div>
+
+<script>
+const API_BASE = window.location.origin.includes('localhost') ? 'http://127.0.0.1:18790' : '';
+let allEntries = [];
+
+async function loadData() {
+    try {
+        const resp = await fetch(`${API_BASE}/v1/tool_history?limit=20`);
+        const data = await resp.json();
+        allEntries = data.entries || [];
+        renderStats();
+        renderHistory();
+    } catch(e) {
+        document.getElementById('history').innerHTML = '<div class="empty">无法连接到 MTClaw (127.0.0.1:18790)<br>请确认服务已启动</div>';
+    }
+}
+
+function renderStats() {
+    const total = allEntries.length;
+    const complete = allEntries.filter(e => e.status === 'task_complete' || (e.ordered_events||[]).some(ev => ev.type === 'tool_result' && !ev.is_error)).length;
+    const avgLatency = total > 0 ? Math.round(allEntries.reduce((s,e) => s + (e.latency_ms || 0), 0) / total) : 0;
+    const toolCalls = allEntries.reduce((s,e) => s + (e.tool_calls||[]).length, 0);
+
+    document.getElementById('stats').innerHTML = `
+        <div class="stat-card"><div class="label">总请求数</div><div class="value">${total}</div></div>
+        <div class="stat-card"><div class="label">Completion 命中</div><div class="value">${complete}</div></div>
+        <div class="stat-card"><div class="label">平均延迟</div><div class="value">${avgLatency}<span style="font-size:0.5em">ms</span></div></div>
+        <div class="stat-card"><div class="label">工具调用数</div><div class="value">${toolCalls}</div></div>
+    `;
+}
+
+function renderHistory() {
+    if (allEntries.length === 0) {
+        document.getElementById('history').innerHTML = '<div class="empty">暂无路由记录</div>';
+        return;
+    }
+
+    const html = allEntries.map(e => {
+        const time = new Date(e.timestamp).toLocaleTimeString('zh-CN');
+        const msg = (e.user_message || '').substring(0, 80);
+        const route = e.route || 'unknown';
+        const status = e.status || 'unknown';
+        const latency = e.latency_ms || 0;
+        const rounds = e.tool_rounds || 0;
+        const tools = (e.tool_calls || []).map(t => t.name).join(', ') || '-';
+        const fn = (e.function_name || route || '').substring(0, 30);
+
+        let routeClass = 'route-upstream';
+        if (status.includes('complete')) routeClass = 'route-complete';
+        else if (status.includes('incomplete')) routeClass = 'route-incomplete';
+        else if (status.includes('error') || status.includes('fail')) routeClass = 'route-error';
+
+        let latencyClass = 'latency-fast';
+        if (latency > 10000) latencyClass = 'latency-slow';
+        else if (latency > 3000) latencyClass = 'latency-medium';
+        const latencyPct = Math.min(latency / 40000 * 100, 100);
+
+        return `
+        <div class="entry">
+            <div class="entry-header">
+                <span class="entry-time">${time}</span>
+                <span class="entry-route ${routeClass}">${fn || route}</span>
+            </div>
+            <div class="entry-message">${msg}</div>
+            <div class="entry-detail">
+                <span>⏱ ${latency}ms<div class="latency-bar"><div class="latency-fill ${latencyClass}" style="width:${latencyPct}%"></div></div></span>
+                <span>🔄 ${rounds} 轮</span>
+                <span>🔧 ${tools}</span>
+                <span>${status}</span>
+            </div>
+        </div>`;
+    }).join('');
+
+    document.getElementById('history').innerHTML = html;
+}
+
+loadData();
+setInterval(loadData, 3000);
+</script>
+</body>
+</html>

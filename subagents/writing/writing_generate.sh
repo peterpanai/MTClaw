@@ -44,7 +44,7 @@ PAYLOAD=$(jq -n \
     '{doc_type:$doc_type, topic:$topic, key_points:$key_points, style:$style, length:$length}')
 
 # Execute engine
-OUTPUT=$(echo "$PAYLOAD" | "$PYTHON" "$ENGINE" writing_generate 2>&1)
+OUTPUT=$(echo "$PAYLOAD" | "$PYTHON" "$ENGINE" writing_generate 2>/dev/null)
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -ne 0 ]; then

@@ -39,7 +39,7 @@ PAYLOAD=$(jq -n \
     '{text:$text, intensity:$intensity, preserve_formatting:$preserve_formatting}')
 
 # Execute engine
-OUTPUT=$(echo "$PAYLOAD" | "$PYTHON" "$ENGINE" writing_humanize 2>&1)
+OUTPUT=$(echo "$PAYLOAD" | "$PYTHON" "$ENGINE" writing_humanize 2>/dev/null)
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -ne 0 ]; then

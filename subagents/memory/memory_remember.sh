@@ -54,8 +54,8 @@ if [ -n "$TAGS_JSON" ] && [ "$TAGS_JSON" != "null" ]; then
     fi
 fi
 
-# Execute engine
-OUTPUT=$("$PYTHON" "$ENGINE" "${ARGS[@]}" 2>&1)
+# Execute engine (stderr goes to stderr, not mixed with stdout JSON)
+OUTPUT=$("$PYTHON" "$ENGINE" "${ARGS[@]}" 2>/dev/null)
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -ne 0 ]; then
